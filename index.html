@@ -177,7 +177,6 @@
 
 <div id="splash">
   <h1>🪷 Ashtadala</h1>
-  <p style="font-size:0.6rem;color:#555;margin-top:-4px">v9-debug</p>
   <p class="sub">The Fading Lotus</p>
   <div class="story">
     A mischievous <strong>Yaksha</strong> is erasing the sacred lotus protecting this pavilion.
@@ -247,10 +246,6 @@
 
 <div id="bottom">
   <div id="petal-grid"></div>
-</div>
-<div id="debug-overlay" style="position:fixed;top:50%;left:0;right:0;z-index:9000;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:13px;padding:8px;display:none;pointer-events:none;">
-  <div id="dbg-line1">waiting...</div>
-  <div id="dbg-line2"></div>
 </div>
 <div id="storm">⚡ The Yaksha storms!<br><span style="font-size:.8rem;font-weight:normal">3 petals fading faster…</span></div>
 <div id="endscreen">
@@ -554,8 +549,10 @@ function startGame() {
   visible    = Array(N).fill(false);
   isHost     = true;      // solo / fallback default
   gameActive = true;
-  updateTimer();           // show 3:00 immediately
-  runLoop();               // ← the fix: start the loop right away
+  timeLeft = GAME_DURATION;
+  updateTimer();
+  refreshUI();
+  runLoop();
 
   // ── Firebase: try to register player & sync ──
   if (db) {
@@ -621,76 +618,62 @@ function setupMarkers() {
 }
 
 // ─────────────────────────────────────────
-// MAIN GAME LOOP — pure local, runs every second
+// MAIN GAME LOOP
 // ─────────────────────────────────────────
 function runLoop() {
-  const iv = setInterval(() => {
+  let iv = setInterval(tick, 1000);
+
+  function tick() {
     if (!gameActive) { clearInterval(iv); return; }
 
-    timeLeft--;
-    updateTimer();
+    // 1. Count down
+    timeLeft = Math.max(0, timeLeft - 1);
+    const m = Math.floor(timeLeft / 60);
+    const s = timeLeft % 60;
+    $timer.textContent = m + ":" + (s < 10 ? "0" : "") + s;
+    $timer.className = timeLeft <= 30 ? "urgent" : "";
 
-    // Storm trigger
+    // 2. Storm
     if (!stormShown && timeLeft <= STORM_AT) {
-      stormShown  = true;
+      stormShown = true;
       stormActive = true;
       stormPetals = shuffle([0,1,2,3,4,5,6,7]).slice(0, STORM_COUNT);
       $storm.style.display = "block";
       setTimeout(() => { $storm.style.display = "none"; }, 3000);
-
-      // Inject Yaksha plane onto storm petals only
       stormPetals.forEach(idx => {
         const entity = document.getElementById("pe" + idx);
         if (!entity) return;
         const el = document.createElement("a-plane");
         el.id = "yaksha-storm-" + idx;
         el.setAttribute("src", "#yaksha-tex");
-        el.setAttribute("width", "0.9");
-        el.setAttribute("height", "0.9");
-        el.setAttribute("transparent", "true");
-        el.setAttribute("opacity", "0.95");
-        el.setAttribute("side", "double");
-        el.setAttribute("position", "0 0.5 0");
+        el.setAttribute("width", "0.9"); el.setAttribute("height", "0.9");
+        el.setAttribute("transparent", "true"); el.setAttribute("opacity", "0.95");
+        el.setAttribute("side", "double"); el.setAttribute("position", "0 0.5 0");
         el.setAttribute("look-at", "[camera]");
-        el.setAttribute("animation__float", "property:position; from:0 0.45 0; to:0 0.62 0; dir:alternate; loop:true; dur:1800; easing:easeInOutSine");
-        el.setAttribute("animation__rock", "property:rotation; from:0 -10 0; to:0 10 0; dir:alternate; loop:true; dur:2200; easing:easeInOutSine");
         entity.appendChild(el);
       });
-
       setTimeout(() => {
         stormActive = false;
-        // Remove Yaksha planes after storm ends
         stormPetals.forEach(idx => {
           const el = document.getElementById("yaksha-storm-" + idx);
-          if (el) el.parentNode.removeChild(el);
+          if (el && el.parentNode) el.parentNode.removeChild(el);
         });
       }, 20000);
     }
 
-    // ── Guard score: purely local, runs on every phone ──
-    for (let i = 0; i < N; i++) {
-      if (visible[i]) myScore++;
-    }
-    $pts && ($pts.textContent = myScore);
+    // 3. Score
+    for (let i = 0; i < N; i++) { if (visible[i]) myScore++; }
     if (db) { try { db.ref("players/" + playerId + "/score").set(myScore); } catch(e){} }
 
-    // ── Petal fading: always runs locally ──
+    // 4. Fade petals — no conditions, always runs
     for (let i = 0; i < N; i++) {
-      const guarded = visible[i] || remoteGuardedSet.has(i);
-      if (!guarded) {
+      if (!visible[i] && !remoteGuardedSet.has(i)) {
         const rate = (stormActive && stormPetals.includes(i)) ? STORM_RATE : FADE_RATE;
-        petals[i]  = Math.max(0, petals[i] - rate);
+        petals[i] = Math.max(0, petals[i] - rate);
       }
     }
-    const dbgEl = document.getElementById("debug-overlay");
-    if (dbgEl) {
-      dbgEl.style.display = "block";
-      document.getElementById("dbg-line1").textContent =
-        "t="+timeLeft+" gameActive="+gameActive+" isHost="+isHost;
-      document.getElementById("dbg-line2").textContent =
-        "p=["+petals.map(p=>Math.round(p)).join(",")+"] vis=["+visible.map(v=>v?1:0).join(",")+"]";
-    }
-    // Host pushes to Firebase so other players can sync
+
+    // 5. Firebase push (host only)
     if (isHost && db) {
       try {
         const upd = {};
@@ -699,81 +682,71 @@ function runLoop() {
       } catch(e) {}
     }
 
-    // Always update visuals every tick on every device
-    updateVisuals();
-    // Debug: log petal values every 5 seconds
-    if (timeLeft % 5 === 0) console.log("petals:", petals.map(p=>Math.round(p)), "visible:", visible);
+    // 6. Update all UI
+    refreshUI();
 
     if (timeLeft <= 0) { clearInterval(iv); endGame(); }
-  }, 1000);
+  }
 }
 
 function updateTimer() {
   const m = Math.floor(timeLeft / 60), s = timeLeft % 60;
-  $timer.textContent = `${m}:${s.toString().padStart(2, "0")}`;
-  $timer.className   = timeLeft <= 30 ? "urgent" : "";
+  $timer.textContent = m + ":" + (s < 10 ? "0" : "") + s;
+  $timer.className = timeLeft <= 30 ? "urgent" : "";
 }
 
-function updateVisuals() {
-  // Overall brightness bar
-  const avg = Math.round(petals.reduce((a,b) => a+b, 0) / N);
+function refreshUI() {
+  // Brightness bar
+  const avg = Math.round(petals.reduce((a, b) => a + b, 0) / N);
   $brightPct.textContent = avg + "%";
   $brightFill.style.width = avg + "%";
-  if (avg > 65) {
-    $brightPct.className = ""; $brightFill.style.background = "#4ade80";
-  } else if (avg > 35) {
-    $brightPct.className = "mid"; $brightFill.style.background = "#f5a623";
-  } else {
-    $brightPct.className = "low"; $brightFill.style.background = "#ff4444";
-  }
+  $brightFill.style.background = avg > 65 ? "#4ade80" : avg > 35 ? "#f5a623" : "#ff4444";
+  $brightPct.className = avg > 65 ? "" : avg > 35 ? "mid" : "low";
 
   for (let i = 0; i < N; i++) {
-    const b = Math.round(petals[i]), g = visible[i];
+    const b = Math.round(petals[i]);
+    const g = visible[i];
 
-    // AR plane
+    // AR lotus opacity
     const plane = document.getElementById("lotus-plane-" + i);
     if (plane) {
-      plane.setAttribute("opacity", g ? 1.0 : Math.max(0.06, b / 100));
-      plane.setAttribute("color",   g ? "#aaddff" : "#ffffff");
+      plane.setAttribute("opacity", g ? "1" : String(Math.max(0.06, b / 100)));
+      plane.setAttribute("color", g ? "#aaddff" : "#ffffff");
     }
 
-    // AR yaksha — dynamically injected only on storm petals during storm
+    // AR text label
+    const txt = document.getElementById("pt" + i);
+    if (txt) txt.setAttribute("value", (g ? PETAL_NAMES[i] + "  GUARDED" : PETAL_NAMES[i] + "  " + b + "%"));
+
+    // Storm yaksha
     const yaksha = document.getElementById("yaksha-storm-" + i);
     if (yaksha) {
-      if (g) {
-        yaksha.setAttribute("scale","0.3 0.3 0.3"); yaksha.setAttribute("opacity","0.2");
-      } else if (b < 35) {
-        yaksha.setAttribute("scale","1.4 1.4 1.4"); yaksha.setAttribute("opacity","1");
-      } else {
-        yaksha.setAttribute("scale","1 1 1"); yaksha.setAttribute("opacity","0.85");
-      }
+      if (g) { yaksha.setAttribute("scale","0.3 0.3 0.3"); yaksha.setAttribute("opacity","0.2"); }
+      else if (b < 35) { yaksha.setAttribute("scale","1.4 1.4 1.4"); yaksha.setAttribute("opacity","1"); }
+      else { yaksha.setAttribute("scale","1 1 1"); yaksha.setAttribute("opacity","0.85"); }
     }
 
-    const txt = document.getElementById("pt" + i);
-    if (txt) txt.setAttribute("value", g ? `${PETAL_NAMES[i]}  GUARDED` : `${PETAL_NAMES[i]}  ${b}%`);
-
-    // Card UI
-    const card = document.getElementById("pcard" + i);
-    const bar  = document.getElementById("pbar"  + i);
-    const pct  = document.getElementById("ppct"  + i);
-    const cv   = document.getElementById("pcv"   + i);
-
-    if (i === 0 && !bar) console.warn("pbar0 not found in DOM");
-    if (card) {
-      card.className = "pcard" + (g ? " guarded" : b <= 35 ? " low" : "");
-    }
+    // Card bar
+    const bar = document.getElementById("pbar" + i);
     if (bar) {
       bar.style.width = (g ? 100 : b) + "%";
       bar.style.background = g ? "#00e5ff" : b > 65 ? PALETTES[i].glow : b > 35 ? "#f5a623" : "#ff4444";
     }
+
+    // Card percentage text
+    const pct = document.getElementById("ppct" + i);
     if (pct) {
       pct.textContent = g ? "GUARDED" : b + "%";
       pct.style.color = g ? "#00e5ff" : b > 65 ? "#b8864a" : b > 35 ? "#f5a623" : "#ff4444";
     }
-    // Dim the card canvas when petal is low
-    if (cv) {
-      cv.style.opacity = g ? "1" : Math.max(0.2, b / 100).toFixed(2);
-    }
+
+    // Card border state
+    const card = document.getElementById("pcard" + i);
+    if (card) card.className = "pcard" + (g ? " guarded" : b <= 35 ? " low" : "");
+
+    // Card image opacity
+    const cv = document.getElementById("pcv" + i);
+    if (cv) cv.style.opacity = g ? "1" : String(Math.max(0.2, b / 100));
   }
 }
 
