@@ -247,6 +247,10 @@
 <div id="bottom">
   <div id="petal-grid"></div>
 </div>
+<div id="debug-overlay" style="position:fixed;top:50%;left:0;right:0;z-index:9000;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:13px;padding:8px;display:none;pointer-events:none;">
+  <div id="dbg-line1">waiting...</div>
+  <div id="dbg-line2"></div>
+</div>
 <div id="storm">⚡ The Yaksha storms!<br><span style="font-size:.8rem;font-weight:normal">3 petals fading faster…</span></div>
 <div id="endscreen">
   <div style="font-size:3rem;margin-bottom:.3rem">🪷</div>
@@ -677,7 +681,14 @@ function runLoop() {
         petals[i]  = Math.max(0, petals[i] - rate);
       }
     }
-    console.log("TICK t="+timeLeft+" p0="+Math.round(petals[0])+" vis="+visible[0]+" gameActive="+gameActive);
+    const dbgEl = document.getElementById("debug-overlay");
+    if (dbgEl) {
+      dbgEl.style.display = "block";
+      document.getElementById("dbg-line1").textContent =
+        "t="+timeLeft+" gameActive="+gameActive+" isHost="+isHost;
+      document.getElementById("dbg-line2").textContent =
+        "p=["+petals.map(p=>Math.round(p)).join(",")+"] vis=["+visible.map(v=>v?1:0).join(",")+"]";
+    }
     // Host pushes to Firebase so other players can sync
     if (isHost && db) {
       try {
